@@ -3,6 +3,4 @@ wqchartpy
 pandas
 openpyxl
 matplotlib
-matplotlib.pyplot
-matplotlib.patches
 textwrap
