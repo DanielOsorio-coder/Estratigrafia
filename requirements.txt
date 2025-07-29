@@ -3,4 +3,4 @@ wqchartpy
 pandas
 openpyxl
 matplotlib
-textwrap
+
