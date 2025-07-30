@@ -1,4 +1,5 @@
 
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -13,52 +14,97 @@ Autor: Daniel Osorio Álvarez (dosorioalv@gmail.com)
 .Elige la Unidad desde la lista desplegable (Monolito, Arena, etc). El patrón y color se asignarán automáticamente según la leyenda.
 """)
 
-# --- Simbología y valores por defecto ---
+# --- Simbología por defecto ---
 leyenda_default = [
-    # Materiales de obra civil o pozo (no están en Sernageomin, pero se adaptan para diferenciar):
-    {'unidad': 'Monolito', 'uh': '', 'color': '#6fa8dc', 'hatch': ''},               # azul claro, liso
-    {'unidad': 'Sello sanitario', 'uh': '', 'color': '#313131', 'hatch': ''},        # negro casi puro, liso
-    {'unidad': 'Bentonita Pelet', 'uh': '', 'color': '#d9ead3', 'hatch': '...'},     # verde muy claro, puntos grandes
-    {'unidad': 'Bentonita Polvo', 'uh': '', 'color': '#d9ead3', 'hatch': '////'},    # verde muy claro, líneas inclinadas
-    {'unidad': 'Arena', 'uh': '', 'color': '#ffe599', 'hatch': '---'},               # amarillo claro, líneas horizontales (como depósitos aluviales)
-    {'unidad': 'Gravas', 'uh': '', 'color': '#ffe599', 'hatch': '...'},              # amarillo claro, puntos
-    {'unidad': 'Lechada', 'uh': '', 'color': '#f4cccc', 'hatch': '|||'},             # rojo muy claro, líneas verticales
-    {'unidad': 'Esteril', 'uh': '', 'color': '#eeeeee', 'hatch': 'xx'},              # gris pálido, cruzado
-    {'unidad': 'Derrumbes', 'uh': '', 'color': '#b7b7b7', 'hatch': '///...'},        # gris medio, líneas inclinadas y puntos
-
-    # Unidades hidrogeológicas principales (adaptadas del catálogo Sernageomin)
-    {'unidad': 'Basamento', 'uh': '1a', 'color': '#a9746e', 'hatch': 'xxxx'},        # marrón-gris, cruzado denso (como granito/gneis)
-    {'unidad': 'Rocas sedimentarias', 'uh': '1b', 'color': '#f6b26b', 'hatch': '.'}, # naranjo claro, puntos (como lutitas/areniscas)
-    {'unidad': 'Zona de falla', 'uh': '1c', 'color': '#b6d7a8', 'hatch': '////'},    # verde claro, líneas inclinadas (como cataclasitas)
-    {'unidad': 'Ignimbrita Huasco', 'uh': '2', 'color': '#fff2cc', 'hatch': '...'},  # amarillo pálido, puntos
-    {'unidad': 'Conjunto Volcánico Antiguo', 'uh': '3', 'color': '#c9daf8', 'hatch': '---'}, # celeste claro, líneas horizontales
-    {'unidad': 'Ignimbrita Ujina', 'uh': '4', 'color': '#f9cb9c', 'hatch': '.'},     # beige, puntos
-    {'unidad': 'Subunidad Volcánico-Sedimentaria Brechosa', 'uh': '5a', 'color': '#d5a6bd', 'hatch': 'xxx'}, # rosado, cruzado
-    {'unidad': 'Subunidad Evaporítica Profunda', 'uh': '5b', 'color': '#d9d2e9', 'hatch': '||'}, # lila claro, líneas verticales
-    {'unidad': 'Subunidad Volcánico-Sedimentaria Superior', 'uh': '5c', 'color': '#d0e0e3', 'hatch': '\\\\'}, # celeste grisáceo, líneas inclinadas
-    {'unidad': 'Conjunto Volcánico Moderno', 'uh': '6', 'color': '#b49154', 'hatch': '...'},    # café claro, puntos
-    {'unidad': 'Ignimbrita Pastillo', 'uh': '7', 'color': '#ffffff', 'hatch': ''},              # blanco, liso
-    {'unidad': 'Depósitos Sedimentarias Terciarios', 'uh': '8a', 'color': '#fce5cd', 'hatch': '//'}, # durazno claro, líneas inclinadas
-    {'unidad': 'Depósitos Evaporíticos', 'uh': '8b', 'color': '#b4a7d6', 'hatch': ''},          # lila, liso
-    {'unidad': 'Relleno Sedimentario', 'uh': '8c', 'color': '#b7b7b7', 'hatch': '.'},           # gris medio, puntos
+    {'unidad': 'Monolito', 'uh': '', 'color': '#6fa8dc', 'hatch': ''},
+    {'unidad': 'Sello sanitario', 'uh': '', 'color': '#313131', 'hatch': ''},
+    {'unidad': 'Bentonita Pelet', 'uh': '', 'color': '#d9ead3', 'hatch': '...'},
+    {'unidad': 'Bentonita Polvo', 'uh': '', 'color': '#d9ead3', 'hatch': '////'},
+    {'unidad': 'Arena', 'uh': '', 'color': '#ffe599', 'hatch': '---'},
+    {'unidad': 'Gravas', 'uh': '', 'color': '#ffe599', 'hatch': '...'},
+    {'unidad': 'Lechada', 'uh': '', 'color': '#f4cccc', 'hatch': '|||'},
+    {'unidad': 'Esteril', 'uh': '', 'color': '#eeeeee', 'hatch': 'xx'},
+    {'unidad': 'Derrumbes', 'uh': '', 'color': '#b7b7b7', 'hatch': '///...'},
+    {'unidad': 'Basamento', 'uh': '1a', 'color': '#a9746e', 'hatch': 'xxxx'},
+    {'unidad': 'Rocas sedimentarias', 'uh': '1b', 'color': '#f6b26b', 'hatch': '.'},
+    {'unidad': 'Zona de falla', 'uh': '1c', 'color': '#b6d7a8', 'hatch': '////'},
+    {'unidad': 'Ignimbrita Huasco', 'uh': '2', 'color': '#fff2cc', 'hatch': '...'},
+    {'unidad': 'Conjunto Volcánico Antiguo', 'uh': '3', 'color': '#c9daf8', 'hatch': '---'},
+    {'unidad': 'Ignimbrita Ujina', 'uh': '4', 'color': '#f9cb9c', 'hatch': '.'},
+    {'unidad': 'Subunidad Volcánico-Sedimentaria Brechosa', 'uh': '5a', 'color': '#d5a6bd', 'hatch': 'xxx'},
+    {'unidad': 'Subunidad Evaporítica Profunda', 'uh': '5b', 'color': '#d9d2e9', 'hatch': '||'},
+    {'unidad': 'Subunidad Volcánico-Sedimentaria Superior', 'uh': '5c', 'color': '#d0e0e3', 'hatch': '\\\\'},
+    {'unidad': 'Conjunto Volcánico Moderno', 'uh': '6', 'color': '#b49154', 'hatch': '...'},
+    {'unidad': 'Ignimbrita Pastillo', 'uh': '7', 'color': '#ffffff', 'hatch': ''},
+    {'unidad': 'Depósitos Sedimentarias Terciarios', 'uh': '8a', 'color': '#fce5cd', 'hatch': '//'},
+    {'unidad': 'Depósitos Evaporíticos', 'uh': '8b', 'color': '#b4a7d6', 'hatch': ''},
+    {'unidad': 'Relleno Sedimentario', 'uh': '8c', 'color': '#b7b7b7', 'hatch': '.'},
 ]
 
-unidades_lista = [d['unidad'] for d in leyenda_default]
-leyenda_lookup = {d['unidad']: d for d in leyenda_default}
+# --- Permitir customización de simbología (color, patrón, nombre, agregar/eliminar) ---
+if "leyenda_custom" not in st.session_state:
+    st.session_state.leyenda_custom = [d.copy() for d in leyenda_default]
+
+with st.expander("Editar simbología de unidades (color, patrón y nombre)", expanded=False):
+    st.write("Puedes agregar, eliminar o editar el nombre, color y patrón de cada unidad:")
+
+    # Para manejar unidades a eliminar
+    to_delete = []
+    for i, simb in enumerate(st.session_state.leyenda_custom):
+        cols = st.columns([2, 2, 1, 1, 0.6])
+        with cols[0]:
+            simb['unidad'] = st.text_input(f"Nombre de la unidad {i+1}", value=simb['unidad'], key=f"unidadname_{i}")
+        with cols[1]:
+            simb['color'] = st.color_picker(f"Color para {simb['unidad']}", value=simb['color'], key=f"colpick_{i}")
+        with cols[2]:
+            simb['hatch'] = st.text_input(f"Patrón (hatch) para {simb['unidad']}", value=simb['hatch'], key=f"hatch_{i}")
+        with cols[4]:
+            if st.button("🗑️", key=f"del_unidad_{i}"):
+                to_delete.append(i)
+    # Borrar luego de iterar (al revés para no desordenar índices)
+    for idx in sorted(to_delete, reverse=True):
+        del st.session_state.leyenda_custom[idx]
+
+    # Agregar unidad
+    if st.button("➕ Agregar nueva unidad"):
+        st.session_state.leyenda_custom.append(
+            {'unidad': f"Nueva Unidad {len(st.session_state.leyenda_custom)+1}", 'uh': '', 'color': '#ffffff', 'hatch': ''}
+        )
+
+    ccol1, ccol2 = st.columns([1,1])
+    with ccol1:
+        if st.button("🔄 Restaurar simbología por defecto"):
+            st.session_state.leyenda_custom = [d.copy() for d in leyenda_default]
+    with ccol2:
+        st.info("Patrones (hatch) típicos: `/`, `\\`, `x`, `xx`, `|`, `-`, `+`, `.`, `...`, `//`, `|||`, etc. (puedes combinarlos)")
+
+# --- Usar simbología customizada ---
+leyenda_actual = st.session_state.leyenda_custom
+unidades_lista = [d['unidad'] for d in leyenda_actual]
+leyenda_lookup = {d['unidad']: d for d in leyenda_actual}
+
+# --- Sincroniza la columna 'Unidad' con la leyenda (elimina valores no existentes y actualiza cambios de nombre) ---
+if "df" in st.session_state:
+    # Cambios de nombre: mapping desde default a custom
+    old_names = [d['unidad'] for d in leyenda_default]
+    new_names = [d['unidad'] for d in leyenda_actual[:len(leyenda_default)]]
+    mapping = {old: new for old, new in zip(old_names, new_names)}
+    st.session_state.df["Unidad"] = st.session_state.df["Unidad"].replace(mapping)
+    # Si hay unidades eliminadas, deja en blanco las que ya no existen
+    st.session_state.df.loc[~st.session_state.df["Unidad"].isin(unidades_lista), "Unidad"] = ""
 
 # --- Leyenda visual arriba del editor ---
 st.markdown("### Leyenda de patrones para columna Unidad:")
 fig_leyenda, axl = plt.subplots(figsize=(7.2, 1.5))
 axl.axis('off')
-for i, simb in enumerate(leyenda_default):
+for i, simb in enumerate(leyenda_actual):
     axl.add_patch(
         mpatches.Rectangle((i, 0.2), 0.88, 0.5, facecolor=simb['color'],
                            hatch=simb['hatch'], edgecolor='black', linewidth=1.2)
     )
     axl.text(i+0.44, 0.75, f"`{simb['hatch']}`", ha='center', va='bottom', fontsize=5, color='dimgray', family='monospace')
-    # Achica y rota los nombres para mayor claridad
     axl.text(i+0.44, 0.13, simb['unidad'], ha='center', va='top', fontsize=3.8, rotation=90)
-axl.set_xlim(0, len(leyenda_default))
+axl.set_xlim(0, len(leyenda_actual))
 axl.set_ylim(0, 1)
 st.pyplot(fig_leyenda)
 
@@ -91,7 +137,7 @@ with c1:
         df_add = st.session_state.df.copy()
         new_row = {
             "Profundidad_sup": 0, "Profundidad_inf": 10,
-            "Litologia": "", "Unidad": unidades_lista[0], "UH": ""
+            "Litologia": "", "Unidad": unidades_lista[0] if len(unidades_lista) > 0 else "", "UH": ""
         }
         st.session_state.df = pd.concat([df_add, pd.DataFrame([new_row])], ignore_index=True)
 with c2:
@@ -116,19 +162,23 @@ for idx in df_input.index:
             f"Litología fila {idx+1}", value=df_input.at[idx, "Litologia"], key=f"lito_{idx}"
         )
     with cols[3]:
+        # Si la unidad actual está eliminada, la deja vacía
+        current = df_input.at[idx, "Unidad"]
+        if current not in unidades_lista:
+            current = ""
         df_input.at[idx, "Unidad"] = st.selectbox(
-            f"Unidad fila {idx+1}", options=unidades_lista, index=unidades_lista.index(df_input.at[idx, "Unidad"]), key=f"unidad_{idx}"
+            f"Unidad fila {idx+1}", options=[""] + unidades_lista, index=([""] + unidades_lista).index(current), key=f"unidad_{idx}"
         )
     df_input.at[idx, "UH"] = st.text_input(
         f"UH fila {idx+1}", value=df_input.at[idx, "UH"], key=f"uh_{idx}"
     )
     st.markdown("---")
 
-df_input["Color"] = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["color"])
-df_input["Hatch"] = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["hatch"])
+df_input["Color"] = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["color"] if x in leyenda_lookup else "#ffffff")
+df_input["Hatch"] = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["hatch"] if x in leyenda_lookup else "")
 st.session_state.df = df_input
 
-# --- Plot matplotlib como antes ---
+# --- Plot matplotlib ---
 prof_max = df_input["Profundidad_inf"].max()
 prof_min = df_input["Profundidad_sup"].min()
 
@@ -208,9 +258,9 @@ for i, row in df_input.iterrows():
     )
 
 ax_leg.axis('off')
-ax_leg.set_xlim(0, len(leyenda_default))
+ax_leg.set_xlim(0, len(leyenda_actual))
 ax_leg.set_ylim(0, 1.6)
-for i, simb in enumerate(leyenda_default):
+for i, simb in enumerate(leyenda_actual):
     ax_leg.add_patch(
         mpatches.Rectangle((i+0.02, 0.82), 0.75, 0.45, facecolor=simb['color'],
                            hatch=simb['hatch'], edgecolor='black', linewidth=1.1)
