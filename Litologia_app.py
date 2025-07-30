@@ -1,10 +1,10 @@
 
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import textwrap
+import io
 
 st.set_page_config(layout="wide")
 
@@ -270,3 +270,31 @@ ax_leg.set_title("Leyenda", fontsize=10, loc='left', pad=7, rotation=0, weight='
 
 plt.tight_layout(rect=[0, 0.04, 1, 1])
 st.pyplot(fig)
+
+# ==== DESCARGA COMO PNG Y SVG ====
+# Guarda la figura en buffers de memoria
+png_buffer = io.BytesIO()
+fig.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
+png_buffer.seek(0)
+
+svg_buffer = io.BytesIO()
+fig.savefig(svg_buffer, format="svg", bbox_inches="tight")
+svg_buffer.seek(0)
+
+st.markdown("### Descargar figura:")
+
+colp, cols = st.columns(2)
+with colp:
+    st.download_button(
+        label="📥 Descargar como PNG",
+        data=png_buffer,
+        file_name="columna_estratigrafica.png",
+        mime="image/png"
+    )
+with cols:
+    st.download_button(
+        label="📥 Descargar como SVG",
+        data=svg_buffer,
+        file_name="columna_estratigrafica.svg",
+        mime="image/svg+xml"
+    )
