@@ -1,20 +1,148 @@
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import textwrap
 import io
+import numpy as np
+from PIL import Image, ImageChops
+
+# === Cropper opcional (con fallback) ===
+try:
+    from streamlit_cropper import st_cropper
+    CROP_AVAILABLE = True
+except Exception:
+    CROP_AVAILABLE = False
 
 st.set_page_config(layout="wide")
-
 st.title("Generador de Columnas Estratigráficas")
 st.write("""
 Autor: Daniel Osorio Álvarez (dosorioalv@gmail.com)
 .Elige la Unidad desde la lista desplegable (Monolito, Arena, etc). El patrón y color se asignarán automáticamente según la leyenda.
 """)
 
-# --- Simbología por defecto ---
+# --- Controles de layout (sidebar) ---
+st.sidebar.markdown("### Layout")
+col_unidad_ratio = st.sidebar.slider("Ancho columna Unidad", 2.0, 6.0, 4.2, 0.1)
+col_uh_ratio     = st.sidebar.slider("Ancho columna UH",     1.0, 4.0, 2.2, 0.1)
+fig_width        = st.sidebar.slider("Ancho total (figsize)", 10.0, 20.0, 16.0, 0.5)
+
+# -------------------------
+# Utilidades robustas
+# -------------------------
+def hex_to_rgb(hexcolor: str):
+    hexcolor = hexcolor.lstrip('#')
+    return tuple(int(hexcolor[i:i+2], 16) for i in (0, 2, 4))
+
+def process_symbol_pil_only(img, bg_rgb=(255, 255, 255), tol=30, symbol_rgb=(0, 0, 0)) -> Image.Image:
+    base = img.convert("RGB")
+    W, H = base.size
+    bg = Image.new("RGB", (W, H), bg_rgb)
+    diff = ImageChops.difference(base, bg)
+    dist = diff.convert("L")
+    alpha = dist.point(lambda v: 0 if v <= tol else 255, mode="L")
+    colored = Image.new("RGBA", (W, H), (*symbol_rgb, 255))
+    colored.putalpha(alpha)
+    return colored  # RGBA
+
+def fill_rect_with_image(
+    ax,
+    img_rgba: Image.Image,
+    x0, y0, width, height,
+    scale: float = 1.0,
+    zorder: float = 1.0,
+    mode: str = "cover",           # "cover" | "fit" | "contain" | "tile"
+    align_phase: bool = True       # para "tile": alinear fase al sistema de pixeles del eje
+):
+    """
+    Dibuja una imagen dentro del rectángulo [x0, x0+width] x [y0, y0+height].
+    - cover: mantiene aspecto y recorta al centro (zoom con 'scale').
+    - fit:   estira sin mantener aspecto (no recorta).
+    - contain: mantiene aspecto sin recortar (puede dejar bordes transparentes).
+    - tile:  repite (mosaico) para cubrir todo el rectángulo (usa 'scale' como tamaño de motivo).
+    """
+    # Conversión de rectángulo a pixeles del render
+    p0 = ax.transData.transform((x0, y0))
+    p1 = ax.transData.transform((x0 + width, y0 + height))
+    px_w = max(1, int(abs(p1[0] - p0[0])))
+    px_h = max(1, int(abs(p1[1] - p0[1])))
+
+    iw, ih = img_rgba.size
+
+    if mode == "fit":
+        # Estira a la caja exacta
+        final_img = img_rgba.resize((px_w, px_h), Image.NEAREST)
+
+    elif mode == "contain":
+        # Mantiene aspecto (sin recortar), centrado con posibles bordes transparentes
+        base_w = max(1, int(px_w * scale))
+        base_h = max(1, int(px_h * scale))
+        s = min(base_w / iw, base_h / ih)
+        new_w, new_h = max(1, int(iw * s)), max(1, int(ih * s))
+        resized = img_rgba.resize((new_w, new_h), Image.NEAREST)
+        canvas = Image.new("RGBA", (base_w, base_h), (0, 0, 0, 0))
+        off_x = (base_w - new_w) // 2
+        off_y = (base_h - new_h) // 2
+        canvas.paste(resized, (off_x, off_y), resized)
+        final_img = canvas.resize((px_w, px_h), Image.NEAREST)
+
+    elif mode == "tile":
+        # Mosaico del motivo
+        tile_w = max(1, int(iw * scale))
+        tile_h = max(1, int(ih * scale))
+        tile = img_rgba.resize((tile_w, tile_h), Image.NEAREST)
+
+        # Lienzo destino
+        canvas = Image.new("RGBA", (px_w, px_h), (0, 0, 0, 0))
+
+        # Alineación de fase para un mosaico consistente entre rectángulos
+        off_x = 0
+        off_y = 0
+        if align_phase:
+            phase_x = int(p0[0]) % tile_w
+            phase_y = int(p0[1]) % tile_h
+            off_x = -phase_x
+            off_y = -phase_y
+
+        y = off_y
+        while y < px_h:
+            x = off_x
+            while x < px_w:
+                canvas.paste(tile, (x, y), tile)
+                x += tile_w
+            y += tile_h
+
+        final_img = canvas  # ya del tamaño exacto del rectángulo
+
+    else:  # "cover" (por defecto)
+        base_w = max(1, int(px_w * scale))
+        base_h = max(1, int(px_h * scale))
+        s = max(base_w / iw, base_h / ih)  # cubrir
+        new_w, new_h = max(1, int(iw * s)), max(1, int(ih * s))
+        resized = img_rgba.resize((new_w, new_h), Image.NEAREST)
+        # Recorte centrado a base_w x base_h
+        left   = max(0, (new_w - base_w) // 2)
+        top    = max(0, (new_h - base_h) // 2)
+        right  = min(new_w, left + base_w)
+        bottom = min(new_h, top + base_h)
+        cropped = resized.crop((left, top, right, bottom))
+        final_img = cropped.resize((px_w, px_h), Image.NEAREST)
+
+    arr = np.asarray(final_img, dtype=np.uint8)
+    im = ax.imshow(
+        arr,
+        extent=[x0, x0 + width, y0, y0 + height],
+        origin='lower',
+        interpolation='nearest',
+        zorder=zorder,
+        aspect='auto'  # evita deformaciones por la relación de aspecto del eje
+    )
+    # Para SVG más robusto/ligero
+    im.set_rasterized(True)
+
+# -------------------------
+# Simbología por defecto
+# -------------------------
 leyenda_default = [
     {'unidad': 'Monolito', 'uh': '', 'color': '#6fa8dc', 'hatch': ''},
     {'unidad': 'Sello sanitario', 'uh': '', 'color': '#313131', 'hatch': ''},
@@ -41,74 +169,159 @@ leyenda_default = [
     {'unidad': 'Relleno Sedimentario', 'uh': '8c', 'color': '#b7b7b7', 'hatch': '.'},
 ]
 
-# --- Permitir customización de simbología (color, patrón, nombre, agregar/eliminar) ---
+# -------------------------
+# Estado con campos de imagen
+# -------------------------
 if "leyenda_custom" not in st.session_state:
-    st.session_state.leyenda_custom = [d.copy() for d in leyenda_default]
+    st.session_state.leyenda_custom = [
+        {**d, 'img_bytes': None, 'img_scale': 1.0, 'img_mode': 'cover'} for d in leyenda_default
+    ]
 
-with st.expander("Editar simbología de unidades (color, patrón y nombre)", expanded=False):
-    st.write("Puedes agregar, eliminar o editar el nombre, color y patrón de cada unidad:")
+# ===========================================================
+# Editor de simbología + recorte desde catálogo
+# ===========================================================
+with st.expander("Editar simbología (color, patrón y símbolo por imagen con recorte)", expanded=False):
+    st.caption("Puedes cargar una **lámina de símbolos** (PNG/JPG) y recortar un rectángulo para usarlo como patrón.")
+    if not CROP_AVAILABLE:
+        st.warning("Instala `streamlit-cropper` para recortar. Mientras tanto se usará la imagen completa (sin recorte).")
 
-    # Para manejar unidades a eliminar
+    cat_col1, cat_col2 = st.columns([2,1])
+    with cat_col1:
+        catalogo_file = st.file_uploader("Sube imagen de catálogo (opcional, reusable para varias unidades)", type=["png","jpg","jpeg"], key="catalogo")
+    with cat_col2:
+        st.info("Tip: fondo blanco facilita la transparencia.")
+
     to_delete = []
     for i, simb in enumerate(st.session_state.leyenda_custom):
-        cols = st.columns([2, 2, 1, 1, 0.6])
+        st.markdown(f"**Unidad {i+1}:**")
+        cols = st.columns([2, 1.1, 1, 1.2, 0.5])
         with cols[0]:
-            simb['unidad'] = st.text_input(f"Nombre de la unidad {i+1}", value=simb['unidad'], key=f"unidadname_{i}")
+            simb['unidad'] = st.text_input("Nombre", value=simb['unidad'], key=f"unidadname_{i}")
         with cols[1]:
-            simb['color'] = st.color_picker(f"Color para {simb['unidad']}", value=simb['color'], key=f"colpick_{i}")
+            simb['color'] = st.color_picker("Color del símbolo", value=simb['color'], key=f"colpick_{i}")
         with cols[2]:
-            simb['hatch'] = st.text_input(f"Patrón (hatch) para {simb['unidad']}", value=simb['hatch'], key=f"hatch_{i}")
+            simb['hatch'] = st.text_input("Hatch (si no usas imagen)", value=simb['hatch'], key=f"hatch_{i}")
         with cols[4]:
             if st.button("🗑️", key=f"del_unidad_{i}"):
                 to_delete.append(i)
-    # Borrar luego de iterar (al revés para no desordenar índices)
+
+        with cols[3]:
+            st.write("**Símbolo por imagen**")
+            use_catalog = st.checkbox("Usar catálogo subido", value=(catalogo_file is not None), key=f"usecat_{i}")
+            file = catalogo_file if (use_catalog and catalogo_file is not None) else st.file_uploader("o sube imagen propia", type=["png","jpg","jpeg"], key=f"file_{i}")
+
+            bgcol = st.color_picker("Color fondo a quitar", "#FFFFFF", key=f"bg_{i}")
+            tol = st.slider("Tolerancia", 0, 120, 30, key=f"tol_{i}")
+            scale = st.slider("Escala patrón (zoom)", 0.2, 3.0, simb.get('img_scale', 1.0), 0.1, key=f"scale_{i}")
+
+            # Selector de modo de ajuste
+            mode_options = {
+                "Cover (recorta)": "cover",
+                "Fit (estira)": "fit",
+                "Contain (mantiene aspecto)": "contain",
+                "Tile (repetir)": "tile"
+            }
+            inv_mode = {v: k for k, v in mode_options.items()}
+            sel_key = inv_mode.get(simb.get('img_mode', 'cover'), "Cover (recorta)")
+            mode_label = st.selectbox("Modo de ajuste", list(mode_options.keys()),
+                                      index=list(mode_options.keys()).index(sel_key), key=f"mode_{i}")
+            simb['img_mode'] = mode_options[mode_label]
+
+            cropped = None
+            if file is not None:
+                raw = Image.open(file).convert("RGB")
+                if CROP_AVAILABLE:
+                    st.caption("Ajusta el rectángulo verde para elegir el motivo.")
+                    cropped = st_cropper(raw, aspect_ratio=None, box_color="#00FF00", return_type="image", key=f"crop_{i}")
+                else:
+                    cropped = raw
+
+                colb1, colb2 = st.columns(2)
+                with colb1:
+                    if st.button("Aplicar símbolo", key=f"apply_{i}"):
+                        sym_rgb = hex_to_rgb(simb['color'])
+                        bg_rgb = hex_to_rgb(bgcol)
+                        processed = process_symbol_pil_only(cropped, bg_rgb=bg_rgb, tol=int(tol), symbol_rgb=sym_rgb)
+                        bio = io.BytesIO()
+                        processed.save(bio, format="PNG")
+                        bio.seek(0)
+                        simb['img_bytes'] = bio.read()
+                        simb['img_scale'] = float(scale)  # zoom / tamaño motivo
+                        st.success("Símbolo aplicado.")
+                with colb2:
+                    if st.button("Quitar símbolo", key=f"removeimg_{i}"):
+                        simb['img_bytes'] = None
+                        simb['img_scale'] = 1.0
+                        simb['img_mode'] = 'cover'
+                        st.info("Símbolo eliminado.")
+            st.markdown("---")
+
     for idx in sorted(to_delete, reverse=True):
         del st.session_state.leyenda_custom[idx]
 
-    # Agregar unidad
     if st.button("➕ Agregar nueva unidad"):
         st.session_state.leyenda_custom.append(
-            {'unidad': f"Nueva Unidad {len(st.session_state.leyenda_custom)+1}", 'uh': '', 'color': '#ffffff', 'hatch': ''}
+            {'unidad': f"Nueva Unidad {len(st.session_state.leyenda_custom)+1}", 'uh': '', 'color': '#000000', 'hatch': '',
+             'img_bytes': None, 'img_scale': 1.0, 'img_mode': 'cover'}
         )
 
     ccol1, ccol2 = st.columns([1,1])
     with ccol1:
         if st.button("🔄 Restaurar simbología por defecto"):
-            st.session_state.leyenda_custom = [d.copy() for d in leyenda_default]
+            st.session_state.leyenda_custom = [
+                {**d, 'img_bytes': None, 'img_scale': 1.0, 'img_mode': 'cover'} for d in leyenda_default
+            ]
     with ccol2:
-        st.info("Patrones (hatch) típicos: `/`, `\\`, `x`, `xx`, `|`, `-`, `+`, `.`, `...`, `//`, `|||`, etc. (puedes combinarlos)")
+        st.info("Hatch típicos: `/`, `\\`, `x`, `xx`, `|`, `-`, `+`, `.`, `...`, `//`, `|||`, etc.")
 
-# --- Usar simbología customizada ---
+# -------------------------
+# Usar simbología actual
+# -------------------------
 leyenda_actual = st.session_state.leyenda_custom
 unidades_lista = [d['unidad'] for d in leyenda_actual]
 leyenda_lookup = {d['unidad']: d for d in leyenda_actual}
 
-# --- Sincroniza la columna 'Unidad' con la leyenda (elimina valores no existentes y actualiza cambios de nombre) ---
+# Sincroniza nombres si ya hay df
 if "df" in st.session_state:
-    # Cambios de nombre: mapping desde default a custom
     old_names = [d['unidad'] for d in leyenda_default]
     new_names = [d['unidad'] for d in leyenda_actual[:len(leyenda_default)]]
     mapping = {old: new for old, new in zip(old_names, new_names)}
     st.session_state.df["Unidad"] = st.session_state.df["Unidad"].replace(mapping)
-    # Si hay unidades eliminadas, deja en blanco las que ya no existen
     st.session_state.df.loc[~st.session_state.df["Unidad"].isin(unidades_lista), "Unidad"] = ""
 
-# --- Leyenda visual arriba del editor ---
-st.markdown("### Leyenda de patrones para columna Unidad:")
-fig_leyenda, axl = plt.subplots(figsize=(7.2, 1.5))
+# -------- Leyenda de vista previa ----------
+st.markdown("### Leyenda de patrones:")
+prev_w = max(10, 0.7*len(leyenda_actual) + 3)
+fig_leyenda, axl = plt.subplots(figsize=(prev_w, 2.1))
 axl.axis('off')
+axl.set_aspect('auto')  # evita distorsión en vista previa
 for i, simb in enumerate(leyenda_actual):
     axl.add_patch(
-        mpatches.Rectangle((i, 0.2), 0.88, 0.5, facecolor=simb['color'],
-                           hatch=simb['hatch'], edgecolor='black', linewidth=1.2)
+        mpatches.Rectangle((i, 0.18), 0.98, 0.56, facecolor="#ffffff",
+                           edgecolor='black', linewidth=1.2, zorder=0.9)
     )
-    axl.text(i+0.44, 0.75, f"`{simb['hatch']}`", ha='center', va='bottom', fontsize=5, color='dimgray', family='monospace')
-    axl.text(i+0.44, 0.13, simb['unidad'], ha='center', va='top', fontsize=3.8, rotation=90)
+    if simb.get('img_bytes'):
+        img = Image.open(io.BytesIO(simb['img_bytes'])).convert("RGBA")
+        fill_rect_with_image(axl, img, i+0.01, 0.20, 0.96, 0.52,
+                             scale=simb.get('img_scale', 1.0), zorder=1.0,
+                             mode=simb.get('img_mode', 'cover'), align_phase=False)
+        label_pat = "img"
+    else:
+        axl.add_patch(
+            mpatches.Rectangle((i+0.01, 0.20), 0.96, 0.52, facecolor=simb['color'],
+                               hatch=simb['hatch'], edgecolor='black', linewidth=1.0, zorder=1.0)
+        )
+        label_pat = f"`{simb['hatch']}`"
+    axl.text(i+0.50, 0.78, label_pat, ha='center', va='bottom',
+             fontsize=5, color='dimgray', family='monospace')
+    axl.text(i+0.50, 0.12, simb['unidad'], ha='center', va='top', fontsize=4.2, rotation=90)
 axl.set_xlim(0, len(leyenda_actual))
 axl.set_ylim(0, 1)
-st.pyplot(fig_leyenda)
+st.pyplot(fig_leyenda, use_container_width=True, dpi=200)
 
-# --- DataFrame editable SOLO con Unidad como selectbox ---
+# -------------------------
+# Data de ejemplo
+# -------------------------
 if "df" not in st.session_state:
     data = {
         "Profundidad_sup": [0, 20, 40, 60, 80, 110, 130, 150, 180],
@@ -130,21 +343,23 @@ if "df" not in st.session_state:
     }
     st.session_state.df = pd.DataFrame(data)
 
-# --- Añadir y eliminar filas ---
+# -------------------------
+# Añadir / eliminar filas
+# -------------------------
 c1, c2 = st.columns([1,1.2])
 with c1:
     if st.button("➕ Añadir fila"):
         df_add = st.session_state.df.copy()
-        new_row = {
-            "Profundidad_sup": 0, "Profundidad_inf": 10,
-            "Litologia": "", "Unidad": unidades_lista[0] if len(unidades_lista) > 0 else "", "UH": ""
-        }
+        new_row = {"Profundidad_sup": 0, "Profundidad_inf": 10,
+                   "Litologia": "", "Unidad": (unidades_lista[0] if len(unidades_lista) > 0 else ""), "UH": ""}
         st.session_state.df = pd.concat([df_add, pd.DataFrame([new_row])], ignore_index=True)
 with c2:
     if st.button("🗑️ Eliminar última fila") and len(st.session_state.df) > 1:
         st.session_state.df = st.session_state.df.iloc[:-1].reset_index(drop=True)
 
-# --- Edición de datos ---
+# -------------------------
+# Editor de filas
+# -------------------------
 st.write("**Edita los datos:**")
 df_input = st.session_state.df.copy()
 for idx in df_input.index:
@@ -162,34 +377,45 @@ for idx in df_input.index:
             f"Litología fila {idx+1}", value=df_input.at[idx, "Litologia"], key=f"lito_{idx}"
         )
     with cols[3]:
-        # Si la unidad actual está eliminada, la deja vacía
         current = df_input.at[idx, "Unidad"]
         if current not in unidades_lista:
             current = ""
         df_input.at[idx, "Unidad"] = st.selectbox(
             f"Unidad fila {idx+1}", options=[""] + unidades_lista, index=([""] + unidades_lista).index(current), key=f"unidad_{idx}"
         )
-    df_input.at[idx, "UH"] = st.text_input(
-        f"UH fila {idx+1}", value=df_input.at[idx, "UH"], key=f"uh_{idx}"
-    )
+    df_input.at[idx, "UH"] = st.text_input(f"UH fila {idx+1}", value=df_input.at[idx, "UH"], key=f"uh_{idx}")
     st.markdown("---")
 
-df_input["Color"] = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["color"] if x in leyenda_lookup else "#ffffff")
-df_input["Hatch"] = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["hatch"] if x in leyenda_lookup else "")
+# columnas auxiliares para plot
+df_input["Color"]   = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["color"] if x in leyenda_lookup else "#ffffff")
+df_input["Hatch"]   = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["hatch"] if x in leyenda_lookup else "")
+df_input["ImgBytes"]= df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_bytes") if x in leyenda_lookup else None)
+df_input["ImgScale"]= df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_scale", 1.0) if x in leyenda_lookup else 1.0)
+df_input["ImgMode"] = df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_mode", "cover") if x in leyenda_lookup else "cover")
 st.session_state.df = df_input
 
-# --- Plot matplotlib ---
+# -------------------------
+# Plot principal (usa sliders)
+# -------------------------
 prof_max = df_input["Profundidad_inf"].max()
 prof_min = df_input["Profundidad_sup"].min()
 
-fig = plt.figure(figsize=(9.5, 10))
-gs = fig.add_gridspec(2, 5, height_ratios=[14, 1.5], width_ratios=[2.6, 0.4, 1, 1.5, 1.1], hspace=0.08, wspace=0.13)
-ax_lit = fig.add_subplot(gs[0, 0])
-ax0 = fig.add_subplot(gs[0, 2], sharey=ax_lit)
-ax1 = fig.add_subplot(gs[0, 3], sharey=ax_lit)
+fig = plt.figure(figsize=(fig_width, 10), dpi=150)
+gs = fig.add_gridspec(
+    2, 5,
+    height_ratios=[14, 1.7],
+    #         [Descripción, gap, Regla,       Unidad,            UH   ]
+    width_ratios=[  2.4,     0.25, 0.7, col_unidad_ratio, col_uh_ratio ],
+    hspace=0.08,
+    wspace=0.20
+)
+ax_lit  = fig.add_subplot(gs[0, 0])
+ax0     = fig.add_subplot(gs[0, 2], sharey=ax_lit)
+ax1     = fig.add_subplot(gs[0, 3], sharey=ax_lit)
 ax_text = fig.add_subplot(gs[0, 4], sharey=ax_lit)
-ax_leg = fig.add_subplot(gs[1, :])
+ax_leg  = fig.add_subplot(gs[1, :])
 
+# Descripción litológica
 ax_lit.set_ylim(prof_max, prof_min)
 ax_lit.set_xlim(0, 1)
 ax_lit.axis('off')
@@ -204,9 +430,8 @@ for i, row in df_input.iterrows():
     if len(lines) > max_lines:
         text_wrapped = '\n'.join(lines[:max_lines]) + '\n...'
     ax_lit.add_patch(
-        mpatches.Rectangle(
-            (0.04, row["Profundidad_sup"]), 0.92, height,
-            fill=False, edgecolor='black', linewidth=1.1, zorder=1)
+        mpatches.Rectangle((0.04, row["Profundidad_sup"]), 0.92, height,
+                           fill=False, edgecolor='black', linewidth=1.1, zorder=1)
     )
     ax_lit.text(
         0.5, (row["Profundidad_sup"] + row["Profundidad_inf"]) / 2,
@@ -215,6 +440,7 @@ for i, row in df_input.iterrows():
         bbox=dict(boxstyle="square,pad=0.08", facecolor="white", edgecolor="none", linewidth=0)
     )
 
+# Regla de profundidad
 ax0.set_ylim(prof_max, prof_min)
 ax0.set_xlim(0, 1)
 ax0.set_yticks([])
@@ -231,48 +457,75 @@ for y in range(0, int(prof_max)+2, 2):
         ax0.plot([0.89, 1.0], [y, y], color="steelblue", lw=0.9)
 ax0.plot([1.0, 1.0], [prof_min, prof_max], color="steelblue", lw=2)
 
+# Columna de unidades (imagen con modos de ajuste) o hatch
 ax1.set_ylim(prof_max, prof_min)
 ax1.set_xlim(0, 1)
+ax1.set_aspect('auto')  # clave para evitar achatamiento
 ax1.axis("off")
 ax1.set_title("Unidad Hidrogeológica", fontsize=10, weight="bold", pad=16)
 for i, row in df_input.iterrows():
-    ax1.barh(
-        y=(row["Profundidad_sup"] + row["Profundidad_inf"]) / 2,
-        width=1,
-        height=(row["Profundidad_inf"] - row["Profundidad_sup"]),
-        left=0,
-        color=row["Color"],
-        edgecolor="black",
-        hatch=row["Hatch"],
-        linewidth=1.2,
-        zorder=1
+    y0 = row["Profundidad_sup"]
+    h = row["Profundidad_inf"] - row["Profundidad_sup"]
+    ax1.add_patch(
+        mpatches.Rectangle((0.0, y0), 1.0, h, facecolor="white",
+                           edgecolor="black", linewidth=1.2, zorder=0.9)
     )
+    if row["ImgBytes"] is not None:
+        img = Image.open(io.BytesIO(row["ImgBytes"])).convert("RGBA")
+        fill_rect_with_image(
+            ax1, img, 0.0, y0, 1.0, h,
+            scale=float(row["ImgScale"]),
+            zorder=1.0,
+            mode=row["ImgMode"],
+            align_phase=True  # útil para 'tile'
+        )
+    else:
+        ax1.barh(
+            y=(row["Profundidad_sup"] + row["Profundidad_inf"]) / 2,
+            width=1, height=h, left=0,
+            color=row["Color"], edgecolor="black",
+            hatch=row["Hatch"], linewidth=1.2, zorder=1
+        )
 
+# Texto UH
 ax_text.set_ylim(prof_max, prof_min)
 ax_text.set_xlim(0, 1)
 ax_text.axis("off")
 for i, row in df_input.iterrows():
-    ax_text.text(
-        0.01, (row["Profundidad_sup"] + row["Profundidad_inf"]) / 2,
-        row["UH"], va="center", ha="left", fontsize=9, fontweight="bold", color="black"
-    )
+    ax_text.text(0.01, (row["Profundidad_sup"] + row["Profundidad_inf"]) / 2,
+                 row["UH"], va="center", ha="left", fontsize=9, fontweight="bold", color="black")
 
+# Leyenda inferior
 ax_leg.axis('off')
 ax_leg.set_xlim(0, len(leyenda_actual))
 ax_leg.set_ylim(0, 1.6)
+ax_leg.set_aspect('auto')
 for i, simb in enumerate(leyenda_actual):
     ax_leg.add_patch(
-        mpatches.Rectangle((i+0.02, 0.82), 0.75, 0.45, facecolor=simb['color'],
-                           hatch=simb['hatch'], edgecolor='black', linewidth=1.1)
+        mpatches.Rectangle((i+0.02, 0.82), 0.75, 0.45, facecolor="white",
+                           edgecolor='black', linewidth=1.1, zorder=0.9)
     )
+    if simb.get('img_bytes'):
+        img = Image.open(io.BytesIO(simb['img_bytes'])).convert("RGBA")
+        fill_rect_with_image(
+            ax_leg, img, i+0.02, 0.82, 0.75, 0.45,
+            scale=simb.get('img_scale', 1.0),
+            zorder=1.0,
+            mode=simb.get('img_mode', 'cover'),
+            align_phase=False
+        )
+    else:
+        ax_leg.add_patch(
+            mpatches.Rectangle((i+0.02, 0.82), 0.75, 0.45, facecolor=simb['color'],
+                               hatch=simb['hatch'], edgecolor='black', linewidth=1.1, zorder=1.0)
+        )
     ax_leg.text(i+0.38, 0.78, simb['unidad'], ha='center', va='top', fontsize=6.5, rotation=90, weight='bold')
 ax_leg.set_title("Leyenda", fontsize=10, loc='left', pad=7, rotation=0, weight='bold')
 
-plt.tight_layout(rect=[0, 0.04, 1, 1])
-st.pyplot(fig)
+plt.subplots_adjust(top=0.98, bottom=0.06, left=0.05, right=0.98, wspace=0.20, hspace=0.08)
+st.pyplot(fig, use_container_width=True, dpi=200)
 
-# ==== DESCARGA COMO PNG Y SVG ====
-# Guarda la figura en buffers de memoria
+# ==== DESCARGAS PNG y SVG ====
 png_buffer = io.BytesIO()
 fig.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
 png_buffer.seek(0)
@@ -282,19 +535,8 @@ fig.savefig(svg_buffer, format="svg", bbox_inches="tight")
 svg_buffer.seek(0)
 
 st.markdown("### Descargar figura:")
-
 colp, cols = st.columns(2)
 with colp:
-    st.download_button(
-        label="📥 Descargar como PNG",
-        data=png_buffer,
-        file_name="columna_estratigrafica.png",
-        mime="image/png"
-    )
+    st.download_button("📥 PNG", data=png_buffer, file_name="columna_estratigrafica.png", mime="image/png")
 with cols:
-    st.download_button(
-        label="📥 Descargar como SVG",
-        data=svg_buffer,
-        file_name="columna_estratigrafica.svg",
-        mime="image/svg+xml"
-    )
+    st.download_button("📥 SVG", data=svg_buffer, file_name="columna_estratigrafica.svg", mime="image/svg+xml")
