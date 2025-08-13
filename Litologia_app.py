@@ -27,6 +27,13 @@ col_unidad_ratio = st.sidebar.slider("Ancho columna Unidad", 2.0, 6.0, 4.2, 0.1)
 col_uh_ratio     = st.sidebar.slider("Ancho columna UH",     1.0, 4.0, 2.2, 0.1)
 fig_width        = st.sidebar.slider("Ancho total (figsize)", 10.0, 20.0, 16.0, 0.5)
 
+st.sidebar.markdown("### Opciones de Contain")
+contain_match_width  = st.sidebar.checkbox("Contain: usar ancho del motivo", True)
+contain_apply_global = st.sidebar.checkbox("Contain: aplicar ancho a toda la columna", True)
+contain_align_label  = st.sidebar.selectbox("Contain: alineación", ["Centrado", "Izquierda", "Derecha"], index=0)
+contain_fallback_pct = st.sidebar.slider("Contain: ancho manual si no hay imagen (%)", 20, 100, 70, 1)
+_align_map = {"Centrado": "center", "Izquierda": "left", "Derecha": "right"}
+
 # -------------------------
 # Utilidades robustas
 # -------------------------
@@ -52,29 +59,36 @@ def fill_rect_with_image(
     scale: float = 1.0,
     zorder: float = 1.0,
     mode: str = "cover",           # "cover" | "fit" | "contain" | "tile"
-    align_phase: bool = True       # para "tile": alinear fase al sistema de pixeles del eje
+    align_phase: bool = True,      # para "tile": alinear fase al sistema de pixeles del eje
+    align: str = "center",         # "left" | "center" | "right" (si width_override)
+    width_override: float = None   # ancho en coords de datos; si None usa 'width'
 ):
     """
     Dibuja una imagen dentro del rectángulo [x0, x0+width] x [y0, y0+height].
-    - cover: mantiene aspecto y recorta al centro (zoom con 'scale').
-    - fit:   estira sin mantener aspecto (no recorta).
-    - contain: mantiene aspecto sin recortar (puede dejar bordes transparentes).
-    - tile:  repite (mosaico) para cubrir todo el rectángulo (usa 'scale' como tamaño de motivo).
+    Devuelve dict con 'rect_x0', 'rect_width' y 'rect_height' usados (en coords de datos).
     """
-    # Conversión de rectángulo a pixeles del render
-    p0 = ax.transData.transform((x0, y0))
-    p1 = ax.transData.transform((x0 + width, y0 + height))
+    # --- Ancho efectivo del rectángulo ---
+    rect_w = float(width_override) if width_override is not None else float(width)
+    rect_w = max(1e-6, min(rect_w, width))  # clamp
+    if align == "left":
+        x_left = x0
+    elif align == "right":
+        x_left = x0 + (width - rect_w)
+    else:  # center
+        x_left = x0 + (width - rect_w) / 2.0
+
+    # Conversión rectángulo a pixeles
+    p0 = ax.transData.transform((x_left, y0))
+    p1 = ax.transData.transform((x_left + rect_w, y0 + height))
     px_w = max(1, int(abs(p1[0] - p0[0])))
     px_h = max(1, int(abs(p1[1] - p0[1])))
 
     iw, ih = img_rgba.size
 
     if mode == "fit":
-        # Estira a la caja exacta
         final_img = img_rgba.resize((px_w, px_h), Image.NEAREST)
 
     elif mode == "contain":
-        # Mantiene aspecto (sin recortar), centrado con posibles bordes transparentes
         base_w = max(1, int(px_w * scale))
         base_h = max(1, int(px_h * scale))
         s = min(base_w / iw, base_h / ih)
@@ -87,15 +101,10 @@ def fill_rect_with_image(
         final_img = canvas.resize((px_w, px_h), Image.NEAREST)
 
     elif mode == "tile":
-        # Mosaico del motivo
         tile_w = max(1, int(iw * scale))
         tile_h = max(1, int(ih * scale))
         tile = img_rgba.resize((tile_w, tile_h), Image.NEAREST)
-
-        # Lienzo destino
         canvas = Image.new("RGBA", (px_w, px_h), (0, 0, 0, 0))
-
-        # Alineación de fase para un mosaico consistente entre rectángulos
         off_x = 0
         off_y = 0
         if align_phase:
@@ -103,7 +112,6 @@ def fill_rect_with_image(
             phase_y = int(p0[1]) % tile_h
             off_x = -phase_x
             off_y = -phase_y
-
         y = off_y
         while y < px_h:
             x = off_x
@@ -111,16 +119,14 @@ def fill_rect_with_image(
                 canvas.paste(tile, (x, y), tile)
                 x += tile_w
             y += tile_h
+        final_img = canvas
 
-        final_img = canvas  # ya del tamaño exacto del rectángulo
-
-    else:  # "cover" (por defecto)
+    else:  # cover
         base_w = max(1, int(px_w * scale))
         base_h = max(1, int(px_h * scale))
-        s = max(base_w / iw, base_h / ih)  # cubrir
+        s = max(base_w / iw, base_h / ih)
         new_w, new_h = max(1, int(iw * s)), max(1, int(ih * s))
         resized = img_rgba.resize((new_w, new_h), Image.NEAREST)
-        # Recorte centrado a base_w x base_h
         left   = max(0, (new_w - base_w) // 2)
         top    = max(0, (new_h - base_h) // 2)
         right  = min(new_w, left + base_w)
@@ -131,14 +137,14 @@ def fill_rect_with_image(
     arr = np.asarray(final_img, dtype=np.uint8)
     im = ax.imshow(
         arr,
-        extent=[x0, x0 + width, y0, y0 + height],
+        extent=[x_left, x_left + rect_w, y0, y0 + height],
         origin='lower',
         interpolation='nearest',
         zorder=zorder,
-        aspect='auto'  # evita deformaciones por la relación de aspecto del eje
+        aspect='auto'
     )
-    # Para SVG más robusto/ligero
     im.set_rasterized(True)
+    return {"rect_x0": x_left, "rect_width": rect_w, "rect_height": height}
 
 # -------------------------
 # Simbología por defecto
@@ -174,7 +180,8 @@ leyenda_default = [
 # -------------------------
 if "leyenda_custom" not in st.session_state:
     st.session_state.leyenda_custom = [
-        {**d, 'img_bytes': None, 'img_scale': 1.0, 'img_mode': 'cover'} for d in leyenda_default
+        {**d, 'img_bytes': None, 'img_scale': 1.0, 'img_mode': 'cover',
+         'img_native_w': None, 'img_native_h': None} for d in leyenda_default
     ]
 
 # ===========================================================
@@ -246,13 +253,16 @@ with st.expander("Editar simbología (color, patrón y símbolo por imagen con r
                         processed.save(bio, format="PNG")
                         bio.seek(0)
                         simb['img_bytes'] = bio.read()
-                        simb['img_scale'] = float(scale)  # zoom / tamaño motivo
+                        simb['img_scale'] = float(scale)
+                        simb['img_native_w'], simb['img_native_h'] = processed.size
                         st.success("Símbolo aplicado.")
                 with colb2:
                     if st.button("Quitar símbolo", key=f"removeimg_{i}"):
                         simb['img_bytes'] = None
                         simb['img_scale'] = 1.0
                         simb['img_mode'] = 'cover'
+                        simb['img_native_w'] = None
+                        simb['img_native_h'] = None
                         st.info("Símbolo eliminado.")
             st.markdown("---")
 
@@ -262,14 +272,15 @@ with st.expander("Editar simbología (color, patrón y símbolo por imagen con r
     if st.button("➕ Agregar nueva unidad"):
         st.session_state.leyenda_custom.append(
             {'unidad': f"Nueva Unidad {len(st.session_state.leyenda_custom)+1}", 'uh': '', 'color': '#000000', 'hatch': '',
-             'img_bytes': None, 'img_scale': 1.0, 'img_mode': 'cover'}
+             'img_bytes': None, 'img_scale': 1.0, 'img_mode': 'cover', 'img_native_w': None, 'img_native_h': None}
         )
 
     ccol1, ccol2 = st.columns([1,1])
     with ccol1:
         if st.button("🔄 Restaurar simbología por defecto"):
             st.session_state.leyenda_custom = [
-                {**d, 'img_bytes': None, 'img_scale': 1.0, 'img_mode': 'cover'} for d in leyenda_default
+                {**d, 'img_bytes': None, 'img_scale': 1.0, 'img_mode': 'cover', 'img_native_w': None, 'img_native_h': None}
+                for d in leyenda_default
             ]
     with ccol2:
         st.info("Hatch típicos: `/`, `\\`, `x`, `xx`, `|`, `-`, `+`, `.`, `...`, `//`, `|||`, etc.")
@@ -294,7 +305,7 @@ st.markdown("### Leyenda de patrones:")
 prev_w = max(10, 0.7*len(leyenda_actual) + 3)
 fig_leyenda, axl = plt.subplots(figsize=(prev_w, 2.1))
 axl.axis('off')
-axl.set_aspect('auto')  # evita distorsión en vista previa
+axl.set_aspect('auto')
 for i, simb in enumerate(leyenda_actual):
     axl.add_patch(
         mpatches.Rectangle((i, 0.18), 0.98, 0.56, facecolor="#ffffff",
@@ -302,9 +313,9 @@ for i, simb in enumerate(leyenda_actual):
     )
     if simb.get('img_bytes'):
         img = Image.open(io.BytesIO(simb['img_bytes'])).convert("RGBA")
-        fill_rect_with_image(axl, img, i+0.01, 0.20, 0.96, 0.52,
-                             scale=simb.get('img_scale', 1.0), zorder=1.0,
-                             mode=simb.get('img_mode', 'cover'), align_phase=False)
+        _ = fill_rect_with_image(axl, img, i+0.01, 0.20, 0.96, 0.52,
+                                 scale=simb.get('img_scale', 1.0), zorder=1.0,
+                                 mode=simb.get('img_mode', 'cover'), align_phase=False)
         label_pat = "img"
     else:
         axl.add_patch(
@@ -344,20 +355,6 @@ if "df" not in st.session_state:
     st.session_state.df = pd.DataFrame(data)
 
 # -------------------------
-# Añadir / eliminar filas
-# -------------------------
-c1, c2 = st.columns([1,1.2])
-with c1:
-    if st.button("➕ Añadir fila"):
-        df_add = st.session_state.df.copy()
-        new_row = {"Profundidad_sup": 0, "Profundidad_inf": 10,
-                   "Litologia": "", "Unidad": (unidades_lista[0] if len(unidades_lista) > 0 else ""), "UH": ""}
-        st.session_state.df = pd.concat([df_add, pd.DataFrame([new_row])], ignore_index=True)
-with c2:
-    if st.button("🗑️ Eliminar última fila") and len(st.session_state.df) > 1:
-        st.session_state.df = st.session_state.df.iloc[:-1].reset_index(drop=True)
-
-# -------------------------
 # Editor de filas
 # -------------------------
 st.write("**Edita los datos:**")
@@ -387,15 +384,17 @@ for idx in df_input.index:
     st.markdown("---")
 
 # columnas auxiliares para plot
-df_input["Color"]   = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["color"] if x in leyenda_lookup else "#ffffff")
-df_input["Hatch"]   = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["hatch"] if x in leyenda_lookup else "")
-df_input["ImgBytes"]= df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_bytes") if x in leyenda_lookup else None)
-df_input["ImgScale"]= df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_scale", 1.0) if x in leyenda_lookup else 1.0)
-df_input["ImgMode"] = df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_mode", "cover") if x in leyenda_lookup else "cover")
+df_input["Color"]       = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["color"] if x in leyenda_lookup else "#ffffff")
+df_input["Hatch"]       = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["hatch"] if x in leyenda_lookup else "")
+df_input["ImgBytes"]    = df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_bytes") if x in leyenda_lookup else None)
+df_input["ImgScale"]    = df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_scale", 1.0) if x in leyenda_lookup else 1.0)
+df_input["ImgMode"]     = df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_mode", "cover") if x in leyenda_lookup else "cover")
+df_input["ImgNativeW"]  = df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_native_w") if x in leyenda_lookup else None)
+df_input["ImgNativeH"]  = df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_native_h") if x in leyenda_lookup else None)
 st.session_state.df = df_input
 
 # -------------------------
-# Plot principal (usa sliders)
+# Plot principal
 # -------------------------
 prof_max = df_input["Profundidad_inf"].max()
 prof_min = df_input["Profundidad_sup"].min()
@@ -441,11 +440,8 @@ for i, row in df_input.iterrows():
     )
 
 # Regla de profundidad
-ax0.set_ylim(prof_max, prof_min)
-ax0.set_xlim(0, 1)
-ax0.set_yticks([])
-ax0.set_xticks([])
-ax0.axis('off')
+ax0.set_ylim(prof_max, prof_min); ax0.set_xlim(0, 1)
+ax0.set_yticks([]); ax0.set_xticks([]); ax0.axis('off')
 ax0.set_title("Profundidad", fontsize=10, weight="bold", pad=16)
 for y in range(0, int(prof_max)+2, 2):
     if y % 10 == 0:
@@ -457,49 +453,86 @@ for y in range(0, int(prof_max)+2, 2):
         ax0.plot([0.89, 1.0], [y, y], color="steelblue", lw=0.9)
 ax0.plot([1.0, 1.0], [prof_min, prof_max], color="steelblue", lw=2)
 
-# Columna de unidades (imagen con modos de ajuste) o hatch
-ax1.set_ylim(prof_max, prof_min)
-ax1.set_xlim(0, 1)
-ax1.set_aspect('auto')  # clave para evitar achatamiento
-ax1.axis("off")
+# Columna de unidades
+ax1.set_ylim(prof_max, prof_min); ax1.set_xlim(0, 1)
+ax1.set_aspect('auto'); ax1.axis("off")
 ax1.set_title("Unidad Hidrogeológica", fontsize=10, weight="bold", pad=16)
+
+# --- Cálculo de ancho global cuando hay Contain ---
+p0_col = ax1.transData.transform((0.0, prof_min))
+p1_col = ax1.transData.transform((1.0, prof_min))
+col_px_w = max(1, int(abs(p1_col[0] - p0_col[0])))
+
+global_contain_frac = None
+if contain_match_width and contain_apply_global and (df_input["ImgMode"] == "contain").any():
+    fracs = []
+    for _, r in df_input.iterrows():
+        if r["ImgMode"] == "contain" and r["ImgNativeW"] is not None:
+            fracs.append((float(r["ImgNativeW"]) / float(col_px_w)) * float(r["ImgScale"]))
+    if fracs:
+        global_contain_frac = float(np.median(fracs))  # robusto ante outliers
+    else:
+        global_contain_frac = contain_fallback_pct / 100.0
+    global_contain_frac = float(np.clip(global_contain_frac, 0.05, 1.0))
+
+# --- Dibujo de cada estrato ---
 for i, row in df_input.iterrows():
     y0 = row["Profundidad_sup"]
-    h = row["Profundidad_inf"] - row["Profundidad_sup"]
-    ax1.add_patch(
-        mpatches.Rectangle((0.0, y0), 1.0, h, facecolor="white",
-                           edgecolor="black", linewidth=1.2, zorder=0.9)
-    )
+    h  = row["Profundidad_inf"] - row["Profundidad_sup"]
+
+    # ¿Usamos ancho override?
+    width_override = None
+    if contain_match_width and contain_apply_global and global_contain_frac is not None:
+        width_override = global_contain_frac
+    elif contain_match_width and row["ImgMode"] == "contain" and row["ImgNativeW"] is not None:
+        # modo por unidad (cuando el global está desactivado)
+        width_override = (float(row["ImgNativeW"]) / float(col_px_w)) * float(row["ImgScale"])
+        width_override = float(np.clip(width_override, 0.05, 1.0))
+
     if row["ImgBytes"] is not None:
         img = Image.open(io.BytesIO(row["ImgBytes"])).convert("RGBA")
-        fill_rect_with_image(
+        info = fill_rect_with_image(
             ax1, img, 0.0, y0, 1.0, h,
             scale=float(row["ImgScale"]),
             zorder=1.0,
             mode=row["ImgMode"],
-            align_phase=True  # útil para 'tile'
+            align_phase=True,
+            align=_align_map[contain_align_label],
+            width_override=width_override
+        )
+        # Borde
+        ax1.add_patch(
+            mpatches.Rectangle((info["rect_x0"], y0), info["rect_width"], h,
+                               facecolor="none", edgecolor="black", linewidth=1.2, zorder=1.5)
         )
     else:
-        ax1.barh(
-            y=(row["Profundidad_sup"] + row["Profundidad_inf"]) / 2,
-            width=1, height=h, left=0,
-            color=row["Color"], edgecolor="black",
-            hatch=row["Hatch"], linewidth=1.2, zorder=1
-        )
+        # Hatch/Color: aplicar mismo ancho si corresponde
+        if width_override is not None:
+            # alinear según opción
+            if _align_map[contain_align_label] == "left":
+                x_left = 0.0
+            elif _align_map[contain_align_label] == "right":
+                x_left = 1.0 - width_override
+            else:
+                x_left = (1.0 - width_override) / 2.0
+            ax1.add_patch(
+                mpatches.Rectangle((x_left, y0), width_override, h, facecolor=row["Color"],
+                                   edgecolor="black", linewidth=1.2, hatch=row["Hatch"], zorder=1.0)
+            )
+        else:
+            ax1.add_patch(
+                mpatches.Rectangle((0.0, y0), 1.0, h, facecolor=row["Color"],
+                                   edgecolor="black", linewidth=1.2, hatch=row["Hatch"], zorder=1.0)
+            )
 
 # Texto UH
-ax_text.set_ylim(prof_max, prof_min)
-ax_text.set_xlim(0, 1)
-ax_text.axis("off")
+ax_text.set_ylim(prof_max, prof_min); ax_text.set_xlim(0, 1); ax_text.axis("off")
 for i, row in df_input.iterrows():
     ax_text.text(0.01, (row["Profundidad_sup"] + row["Profundidad_inf"]) / 2,
                  row["UH"], va="center", ha="left", fontsize=9, fontweight="bold", color="black")
 
 # Leyenda inferior
-ax_leg.axis('off')
-ax_leg.set_xlim(0, len(leyenda_actual))
-ax_leg.set_ylim(0, 1.6)
-ax_leg.set_aspect('auto')
+ax_leg.axis('off'); ax_leg.set_xlim(0, len(leyenda_actual)); ax_leg.set_ylim(0, 1.6); ax_leg.set_aspect('auto')
 for i, simb in enumerate(leyenda_actual):
     ax_leg.add_patch(
         mpatches.Rectangle((i+0.02, 0.82), 0.75, 0.45, facecolor="white",
@@ -507,7 +540,7 @@ for i, simb in enumerate(leyenda_actual):
     )
     if simb.get('img_bytes'):
         img = Image.open(io.BytesIO(simb['img_bytes'])).convert("RGBA")
-        fill_rect_with_image(
+        _ = fill_rect_with_image(
             ax_leg, img, i+0.02, 0.82, 0.75, 0.45,
             scale=simb.get('img_scale', 1.0),
             zorder=1.0,
@@ -527,12 +560,9 @@ st.pyplot(fig, use_container_width=True, dpi=200)
 
 # ==== DESCARGAS PNG y SVG ====
 png_buffer = io.BytesIO()
-fig.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight")
-png_buffer.seek(0)
-
+fig.savefig(png_buffer, format="png", dpi=300, bbox_inches="tight"); png_buffer.seek(0)
 svg_buffer = io.BytesIO()
-fig.savefig(svg_buffer, format="svg", bbox_inches="tight")
-svg_buffer.seek(0)
+fig.savefig(svg_buffer, format="svg", bbox_inches="tight"); svg_buffer.seek(0)
 
 st.markdown("### Descargar figura:")
 colp, cols = st.columns(2)
