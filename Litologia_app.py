@@ -35,7 +35,7 @@ contain_fallback_pct = st.sidebar.slider("Contain: ancho manual si no hay imagen
 _align_map = {"Centrado": "center", "Izquierda": "left", "Derecha": "right"}
 
 # -------------------------
-# Utilidades robustas
+# Utilidades
 # -------------------------
 def hex_to_rgb(hexcolor: str):
     hexcolor = hexcolor.lstrip('#')
@@ -63,10 +63,6 @@ def fill_rect_with_image(
     align: str = "center",         # "left" | "center" | "right" (si width_override)
     width_override: float = None   # ancho en coords de datos; si None usa 'width'
 ):
-    """
-    Dibuja una imagen dentro del rectángulo [x0, x0+width] x [y0, y0+height].
-    Devuelve dict con 'rect_x0', 'rect_width' y 'rect_height' usados (en coords de datos).
-    """
     # --- Ancho efectivo del rectángulo ---
     rect_w = float(width_override) if width_override is not None else float(width)
     rect_w = max(1e-6, min(rect_w, width))  # clamp
@@ -221,7 +217,6 @@ with st.expander("Editar simbología (color, patrón y símbolo por imagen con r
             tol = st.slider("Tolerancia", 0, 120, 30, key=f"tol_{i}")
             scale = st.slider("Escala patrón (zoom)", 0.2, 3.0, simb.get('img_scale', 1.0), 0.1, key=f"scale_{i}")
 
-            # Selector de modo de ajuste
             mode_options = {
                 "Cover (recorta)": "cover",
                 "Fit (estira)": "fit",
@@ -266,8 +261,17 @@ with st.expander("Editar simbología (color, patrón y símbolo por imagen con r
                         st.info("Símbolo eliminado.")
             st.markdown("---")
 
+    # Evitar borrar unidades en uso
+    used_units = set()
+    if "df" in st.session_state:
+        used_units = set(st.session_state.df.get("Unidad", []))
+
     for idx in sorted(to_delete, reverse=True):
-        del st.session_state.leyenda_custom[idx]
+        name = st.session_state.leyenda_custom[idx]['unidad']
+        if name in used_units:
+            st.warning(f"No se puede eliminar '{name}' porque está en uso en la tabla.")
+        else:
+            del st.session_state.leyenda_custom[idx]
 
     if st.button("➕ Agregar nueva unidad"):
         st.session_state.leyenda_custom.append(
@@ -292,13 +296,36 @@ leyenda_actual = st.session_state.leyenda_custom
 unidades_lista = [d['unidad'] for d in leyenda_actual]
 leyenda_lookup = {d['unidad']: d for d in leyenda_actual}
 
+# -------------------------
+# Data de ejemplo
+# -------------------------
+if "df" not in st.session_state:
+    data = {
+        "Profundidad_sup": [0, 20, 40, 60, 80, 110, 130, 150, 180],
+        "Profundidad_inf": [20, 40, 60, 80, 110, 130, 150, 180, 210],
+        "Litologia": [
+            "Toba cristalina grises a rosáceas, fragmentos grava a arena, sin arcilla.",
+            "Brecha de falla pardo-rojiza, meteorizada, con arcilla.",
+            "Toba morada-gris con oxidación, bajo contenido de arcilla.",
+            "Intrusivo gris, identificado como dique con vetas de Qz.",
+            "Toba morada-gris alterada (Qz, Ser), sin arcilla, con intrusivos.",
+            "Brecha de falla pardo-rojiza, meteorizada, con arcilla.",
+            "Toba morada-gris alterada, intrusivos cortando la unidad.",
+            "Fragmentos de roca arena, zona de falla.",
+            "Estéril y derrumbes con gravas."
+        ],
+        "Unidad": ['Monolito', 'Sello sanitario', 'Bentonita Pelet', 'Bentonita Polvo', 'Arena',
+                   'Gravas', 'Lechada', 'Esteril', 'Derrumbes'],
+        "UH": ['UH-4b', 'UH-1c', 'UH-4b', 'UH-1a', 'UH-4b', 'UH-1a', 'UH-4b', 'UH-1c', 'UH-1c'],
+    }
+    st.session_state.df = pd.DataFrame(data)
+
 # Sincroniza nombres si ya hay df
-if "df" in st.session_state:
-    old_names = [d['unidad'] for d in leyenda_default]
-    new_names = [d['unidad'] for d in leyenda_actual[:len(leyenda_default)]]
-    mapping = {old: new for old, new in zip(old_names, new_names)}
-    st.session_state.df["Unidad"] = st.session_state.df["Unidad"].replace(mapping)
-    st.session_state.df.loc[~st.session_state.df["Unidad"].isin(unidades_lista), "Unidad"] = ""
+old_names = [d['unidad'] for d in leyenda_default]
+new_names = [d['unidad'] for d in leyenda_actual[:len(leyenda_default)]]
+mapping = {old: new for old, new in zip(old_names, new_names)}
+st.session_state.df["Unidad"] = st.session_state.df["Unidad"].replace(mapping)
+st.session_state.df.loc[~st.session_state.df["Unidad"].isin(unidades_lista), "Unidad"] = ""
 
 # -------- Leyenda de vista previa ----------
 st.markdown("### Leyenda de patrones:")
@@ -331,73 +358,152 @@ axl.set_ylim(0, 1)
 st.pyplot(fig_leyenda, use_container_width=True, dpi=200)
 
 # -------------------------
-# Data de ejemplo
+# GESTOR RÁPIDO DE UNIDADES
 # -------------------------
-if "df" not in st.session_state:
-    data = {
-        "Profundidad_sup": [0, 20, 40, 60, 80, 110, 130, 150, 180],
-        "Profundidad_inf": [20, 40, 60, 80, 110, 130, 150, 180, 210],
-        "Litologia": [
-            "Toba cristalina grises a rosáceas, fragmentos grava a arena, sin arcilla.",
-            "Brecha de falla pardo-rojiza, meteorizada, con arcilla.",
-            "Toba morada-gris con oxidación, bajo contenido de arcilla.",
-            "Intrusivo gris, identificado como dique con vetas de Qz.",
-            "Toba morada-gris alterada (Qz, Ser), sin arcilla, con intrusivos.",
-            "Brecha de falla pardo-rojiza, meteorizada, con arcilla.",
-            "Toba morada-gris alterada, intrusivos cortando la unidad.",
-            "Fragmentos de roca arena, zona de falla.",
-            "Estéril y derrumbes con gravas."
-        ],
-        "Unidad": ['Monolito', 'Sello sanitario', 'Bentonita Pelet', 'Bentonita Polvo', 'Arena',
-                   'Gravas', 'Lechada', 'Esteril', 'Derrumbes'],
-        "UH": ['UH-4b', 'UH-1c', 'UH-4b', 'UH-1a', 'UH-4b', 'UH-1a', 'UH-4b', 'UH-1c', 'UH-1c'],
-    }
-    st.session_state.df = pd.DataFrame(data)
+with st.expander("Gestión rápida de Unidades (agregar/quitar desde el editor de filas)", expanded=True):
+    c1, c2, c3 = st.columns([1.5, 1, 1])
+    with c1:
+        new_u = st.text_input("Nueva unidad (solo nombre)", key="quick_new_u")
+    with c2:
+        if st.button("➕ Agregar unidad", key="quick_add_u"):
+            if new_u and new_u not in unidades_lista:
+                st.session_state.leyenda_custom.append(
+                    {'unidad': new_u, 'uh': '', 'color': '#cccccc', 'hatch': '',
+                     'img_bytes': None, 'img_scale': 1.0, 'img_mode': 'cover',
+                     'img_native_w': None, 'img_native_h': None}
+                )
+                st.success(f"Unidad '{new_u}' agregada.")
+            else:
+                st.warning("Escribe un nombre nuevo que no exista.")
+    with c3:
+        del_u = st.selectbox("Eliminar unidad (si no está en uso)", [""] + unidades_lista, key="quick_del_sel")
+        if st.button("🗑️ Eliminar unidad", key="quick_del_u"):
+            if del_u:
+                if del_u in set(st.session_state.df["Unidad"]):
+                    st.warning(f"No se puede eliminar '{del_u}' porque está en uso en la tabla.")
+                else:
+                    st.session_state.leyenda_custom = [d for d in st.session_state.leyenda_custom if d['unidad'] != del_u]
+                    st.success(f"Unidad '{del_u}' eliminada.")
+
+# Recalcular listas tras posibles cambios
+leyenda_actual = st.session_state.leyenda_custom
+unidades_lista = [d['unidad'] for d in leyenda_actual]
+leyenda_lookup = {d['unidad']: d for d in leyenda_actual}
 
 # -------------------------
-# Editor de filas
+# Editor de filas (con agregar/quitar)
 # -------------------------
 st.write("**Edita los datos:**")
+
+def _make_default_row(last_inf: float = None, alto: float = 20.0):
+    if last_inf is None:
+        sup = 0.0
+    else:
+        sup = float(last_inf)
+    inf = sup + float(alto)
+    return {
+        "Profundidad_sup": sup,
+        "Profundidad_inf": inf,
+        "Litologia": "",
+        "Unidad": "",
+        "UH": ""
+    }
+
+# Botonera superior del editor
+ec1, ec2, ec3, ec4 = st.columns([1,1,1,1.5])
+with ec1:
+    if st.button("➕ Agregar fila al final"):
+        last_inf = float(st.session_state.df["Profundidad_inf"].max()) if len(st.session_state.df) else None
+        newrow = _make_default_row(last_inf)
+        st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([newrow])], ignore_index=True)
+with ec2:
+    if st.button("↕️ Ordenar por profundidad"):
+        st.session_state.df = st.session_state.df.sort_values(by=["Profundidad_sup","Profundidad_inf"], ascending=[True, True]).reset_index(drop=True)
+with ec3:
+    if st.button("🧮 Normalizar continuidad"):
+        # ajusta para que cada sup sea el inf anterior (no reduce alturas negativas)
+        df = st.session_state.df.sort_values(by=["Profundidad_sup","Profundidad_inf"]).reset_index(drop=True)
+        for i in range(1, len(df)):
+            df.at[i, "Profundidad_sup"] = df.at[i-1, "Profundidad_inf"]
+            if df.at[i, "Profundidad_inf"] <= df.at[i, "Profundidad_sup"]:
+                df.at[i, "Profundidad_inf"] = df.at[i, "Profundidad_sup"] + 1.0
+        st.session_state.df = df.copy()
+with ec4:
+    st.caption("Consejo: inserta filas con el botón ➕ debajo de cada registro. Usa **Normalizar** para encadenar profundidades.")
+
 df_input = st.session_state.df.copy()
+to_delete_rows = []
+to_insert_below = []
+
 for idx in df_input.index:
-    cols = st.columns([1, 1.1, 2, 1.1])
+    cols = st.columns([1, 1.1, 2.0, 1.2, 0.65, 0.65])
     with cols[0]:
         df_input.at[idx, "Profundidad_sup"] = st.number_input(
-            f"Prof. sup. fila {idx+1}", value=float(df_input.at[idx, "Profundidad_sup"]), key=f"sup_{idx}", step=1.0
+            f"Sup {idx+1}", value=float(df_input.at[idx, "Profundidad_sup"]), key=f"sup_{idx}", step=1.0
         )
     with cols[1]:
         df_input.at[idx, "Profundidad_inf"] = st.number_input(
-            f"Prof. inf. fila {idx+1}", value=float(df_input.at[idx, "Profundidad_inf"]), key=f"inf_{idx}", step=1.0
+            f"Inf {idx+1}", value=float(df_input.at[idx, "Profundidad_inf"]), key=f"inf_{idx}", step=1.0
         )
     with cols[2]:
         df_input.at[idx, "Litologia"] = st.text_input(
-            f"Litología fila {idx+1}", value=df_input.at[idx, "Litologia"], key=f"lito_{idx}"
+            f"Litología {idx+1}", value=df_input.at[idx, "Litologia"], key=f"lito_{idx}"
         )
     with cols[3]:
         current = df_input.at[idx, "Unidad"]
         if current not in unidades_lista:
             current = ""
         df_input.at[idx, "Unidad"] = st.selectbox(
-            f"Unidad fila {idx+1}", options=[""] + unidades_lista, index=([""] + unidades_lista).index(current), key=f"unidad_{idx}"
+            f"Unidad {idx+1}", options=[""] + unidades_lista,
+            index=([""] + unidades_lista).index(current), key=f"unidad_{idx}"
         )
-    df_input.at[idx, "UH"] = st.text_input(f"UH fila {idx+1}", value=df_input.at[idx, "UH"], key=f"uh_{idx}")
+    with cols[4]:
+        if st.button("➕ debajo", key=f"add_below_{idx}"):
+            to_insert_below.append(idx)
+    with cols[5]:
+        if st.button("🗑️ fila", key=f"del_row_{idx}"):
+            to_delete_rows.append(idx)
+
+    # UH en línea completa para mejor lectura
+    df_input.at[idx, "UH"] = st.text_input(f"UH {idx+1}", value=df_input.at[idx, "UH"], key=f"uh_{idx}")
     st.markdown("---")
 
-# columnas auxiliares para plot
-df_input["Color"]       = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["color"] if x in leyenda_lookup else "#ffffff")
-df_input["Hatch"]       = df_input["Unidad"].map(lambda x: leyenda_lookup[x]["hatch"] if x in leyenda_lookup else "")
-df_input["ImgBytes"]    = df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_bytes") if x in leyenda_lookup else None)
-df_input["ImgScale"]    = df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_scale", 1.0) if x in leyenda_lookup else 1.0)
-df_input["ImgMode"]     = df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_mode", "cover") if x in leyenda_lookup else "cover")
-df_input["ImgNativeW"]  = df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_native_w") if x in leyenda_lookup else None)
-df_input["ImgNativeH"]  = df_input["Unidad"].map(lambda x: leyenda_lookup[x].get("img_native_h") if x in leyenda_lookup else None)
+# Aplicar inserciones
+if to_insert_below:
+    df_work = df_input.copy()
+    # procesar en orden descendente para no desplazar índices por delante
+    for i in sorted(to_insert_below, reverse=True):
+        sup_i = float(df_work.at[i, "Profundidad_sup"])
+        inf_i = float(df_work.at[i, "Profundidad_inf"])
+        alto = max(1.0, inf_i - sup_i)
+        newrow = _make_default_row(inf_i, alto)
+        upper = df_work.iloc[:i+1]
+        lower = df_work.iloc[i+1:]
+        df_work = pd.concat([upper, pd.DataFrame([newrow]), lower], ignore_index=True)
+    df_input = df_work.copy()
+
+# Aplicar eliminaciones
+if to_delete_rows:
+    df_input = df_input.drop(index=to_delete_rows).reset_index(drop=True)
+
+# Guardar cambios
 st.session_state.df = df_input
+
+# columnas auxiliares para plot
+df_plot = st.session_state.df.copy()
+df_plot["Color"]       = df_plot["Unidad"].map(lambda x: leyenda_lookup[x]["color"] if x in leyenda_lookup else "#ffffff")
+df_plot["Hatch"]       = df_plot["Unidad"].map(lambda x: leyenda_lookup[x]["hatch"] if x in leyenda_lookup else "")
+df_plot["ImgBytes"]    = df_plot["Unidad"].map(lambda x: leyenda_lookup[x].get("img_bytes") if x in leyenda_lookup else None)
+df_plot["ImgScale"]    = df_plot["Unidad"].map(lambda x: leyenda_lookup[x].get("img_scale", 1.0) if x in leyenda_lookup else 1.0)
+df_plot["ImgMode"]     = df_plot["Unidad"].map(lambda x: leyenda_lookup[x].get("img_mode", "cover") if x in leyenda_lookup else "cover")
+df_plot["ImgNativeW"]  = df_plot["Unidad"].map(lambda x: leyenda_lookup[x].get("img_native_w") if x in leyenda_lookup else None)
+df_plot["ImgNativeH"]  = df_plot["Unidad"].map(lambda x: leyenda_lookup[x].get("img_native_h") if x in leyenda_lookup else None)
 
 # -------------------------
 # Plot principal
 # -------------------------
-prof_max = df_input["Profundidad_inf"].max()
-prof_min = df_input["Profundidad_sup"].min()
+prof_max = float(df_plot["Profundidad_inf"].max())
+prof_min = float(df_plot["Profundidad_sup"].min())
 
 fig = plt.figure(figsize=(fig_width, 10), dpi=150)
 gs = fig.add_gridspec(
@@ -419,7 +525,7 @@ ax_lit.set_ylim(prof_max, prof_min)
 ax_lit.set_xlim(0, 1)
 ax_lit.axis('off')
 ax_lit.set_title("Descripción Litología", fontsize=10, weight="bold", pad=16)
-for i, row in df_input.iterrows():
+for i, row in df_plot.iterrows():
     height = row["Profundidad_inf"] - row["Profundidad_sup"]
     fontsize = max(8, min(13, height * 0.17))
     wrapper = textwrap.TextWrapper(width=40)
@@ -464,9 +570,9 @@ p1_col = ax1.transData.transform((1.0, prof_min))
 col_px_w = max(1, int(abs(p1_col[0] - p0_col[0])))
 
 global_contain_frac = None
-if contain_match_width and contain_apply_global and (df_input["ImgMode"] == "contain").any():
+if contain_match_width and contain_apply_global and (df_plot["ImgMode"] == "contain").any():
     fracs = []
-    for _, r in df_input.iterrows():
+    for _, r in df_plot.iterrows():
         if r["ImgMode"] == "contain" and r["ImgNativeW"] is not None:
             fracs.append((float(r["ImgNativeW"]) / float(col_px_w)) * float(r["ImgScale"]))
     if fracs:
@@ -476,7 +582,7 @@ if contain_match_width and contain_apply_global and (df_input["ImgMode"] == "con
     global_contain_frac = float(np.clip(global_contain_frac, 0.05, 1.0))
 
 # --- Dibujo de cada estrato ---
-for i, row in df_input.iterrows():
+for i, row in df_plot.iterrows():
     y0 = row["Profundidad_sup"]
     h  = row["Profundidad_inf"] - row["Profundidad_sup"]
 
@@ -527,7 +633,7 @@ for i, row in df_input.iterrows():
 
 # Texto UH
 ax_text.set_ylim(prof_max, prof_min); ax_text.set_xlim(0, 1); ax_text.axis("off")
-for i, row in df_input.iterrows():
+for i, row in df_plot.iterrows():
     ax_text.text(0.01, (row["Profundidad_sup"] + row["Profundidad_inf"]) / 2,
                  row["UH"], va="center", ha="left", fontsize=9, fontweight="bold", color="black")
 
