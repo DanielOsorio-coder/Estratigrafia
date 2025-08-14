@@ -34,6 +34,11 @@ contain_align_label  = st.sidebar.selectbox("Contain: alineación", ["Centrado",
 contain_fallback_pct = st.sidebar.slider("Contain: ancho manual si no hay imagen (%)", 20, 100, 70, 1)
 _align_map = {"Centrado": "center", "Izquierda": "left", "Derecha": "right"}
 
+# === NUEVO: Opciones de texto ===
+st.sidebar.markdown("### Texto")
+font_lito_base = st.sidebar.slider("Tamaño base Litología", 6, 22, 10, 1)
+lito_escalado = st.sidebar.checkbox("Escalar por altura del estrato", True)
+
 # -------------------------
 # Utilidades
 # -------------------------
@@ -527,7 +532,13 @@ ax_lit.axis('off')
 ax_lit.set_title("Descripción Litología", fontsize=10, weight="bold", pad=16)
 for i, row in df_plot.iterrows():
     height = row["Profundidad_inf"] - row["Profundidad_sup"]
-    fontsize = max(8, min(13, height * 0.17))
+
+    # === NUEVO: cálculo del tamaño de fuente basado en controles ===
+    if lito_escalado:
+        fontsize = float(np.clip(font_lito_base * (height / 20.0), 6, 22))
+    else:
+        fontsize = float(font_lito_base)
+
     wrapper = textwrap.TextWrapper(width=40)
     text_wrapped = "\n".join(wrapper.wrap(str(row["Litologia"])))
     max_lines = int(height // 6.5)
@@ -676,3 +687,4 @@ with colp:
     st.download_button("📥 PNG", data=png_buffer, file_name="columna_estratigrafica.png", mime="image/png")
 with cols:
     st.download_button("📥 SVG", data=svg_buffer, file_name="columna_estratigrafica.svg", mime="image/svg+xml")
+
